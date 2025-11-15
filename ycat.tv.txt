@@ -1,0 +1,277 @@
+
+**للاستفسارات والدعم:**
+استخدم /help للمساعدة
+        """
+        self.send_message(chat_id, gitlab_info)
+    
+    def cmd_projects(self, chat_id, username):
+        """إدارة المشاريع"""
+        projects = self.get_user_projects(chat_id)
+        if projects:
+            projects_list = "\n".join([f"• {p[1]} ({p[2]})" for p in projects])
+            msg = f"📁 **مشاريعك المربوطة:**\n\n{projects_list}"
+        else:
+            msg = "📭 لا توجد مشاريع مربوطة بعد.\n\nاستخدم /setup لربط أول مشروع."
+        self.send_message(chat_id, msg)
+    
+    def cmd_broadcast(self, chat_id, username):
+        """بث رسالة للمستخدمين (للمشرفين فقط)"""
+        # يمكنك تحديد آيدي المشرفين هنا
+        if chat_id not in self.admin_chat_ids:
+            self.send_message(chat_id, "❌ هذا الأمر للمشرفين فقط.")
+            return
+        
+        # هنا يمكن تطوير وظيفة البث
+        self.send_message(chat_id, "📢 وظيفة البث قيد التطوير...")
+    
+    def cmd_stats(self, chat_id, username):
+        """إحصائيات البوت"""
+        stats = self.get_bot_stats()
+        stats_msg = f"""
+📊 **إحصائيات YCat TVTC Bot**
+
+👥 **المستخدمون المسجلون:** {stats['users_count']}
+📁 **المشاريع النشطة:** {stats['projects_count']}
+🕒 **أول تسجيل:** {stats['first_user']}
+📅 **آخر تسجيل:** {stats['last_user']}
+
+💾 **حالة البوت:** ✅ نشط
+🔧 **الإصدار:** 2.0.0
+        """
+        self.send_message(chat_id, stats_msg)
+    
+    def handle_gitlab_event(self, event):
+        """معالجة أحداث GitLab"""
+        event_type = event.get('object_kind')
+        logger.info(f"🔔 Processing GitLab event: {event_type}")
+        
+        handlers = {
+            'push': self.handle_push_event,
+            'issue': self.handle_issue_event,
+            'merge_request': self.handle_merge_request_event,
+            'pipeline': self.handle_pipeline_event,
+            'tag_push': self.handle_tag_event,
+            'note': self.handle_comment_event
+        }
+        
+        if event_type in handlers:
+            message = handlers[event_type](event)
+            if message:
+                self.broadcast_to_all_users(message)
+        else:
+            logger.warning(f"⚠️ Unhandled event type: {event_type}")
+    
+    def handle_push_event(self, event):
+        """معالجة حدث push"""
+        project_name = event['project']['name']
+        user_name = event['user_name']
+        branch = event['ref'].split('/')[-1]
+        commit_count = len(event['commits'])
+        commit_message = event['commits'][0]['message'] if event['commits'] else "No commits"
+        
+        message = f"📥 **Push جديد في {project_name}**\n\n" \
+                 f"👤 **المستخدم:** {user_name}\n" \
+                 f"🌿 **الفرع:** `{branch}`\n" \
+                 f"🔢 **عدد الـ commits:** {commit_count}\n" \
+                 f"📝 **آخر commit:** {commit_message[:100]}..."
+        
+        return message
+    
+    def handle_issue_event(self, event):
+        """معالجة حدث issue"""
+        project_name = event['project']['name']
+        issue_title = event['object_attributes']['title']
+        issue_state = event['object_attributes']['state']
+        user_name = event['user']['name']
+        action = event['object_attributes']['action']
+        
+        state_emoji = "✅" if issue_state == "closed" else "📝"
+        action_text = {
+            'open': 'فتح',
+            'close': 'أغلق',
+            'reopen': 'أعاد فتح',
+            'update': 'حدث'
+        }.get(action, action)
+        
+        message = f"🎯 **Issue {action_text} في {project_name}**\n\n" \
+                 f"📌 **العنوان:** {issue_title}\n" \
+                 f"👤 **بواسطة:** {user_name}\n" \
+                 f"{state_emoji} **الحالة:** {issue_state}"
+        
+        return message
+    
+    def handle_merge_request_event(self, event):
+        """معالجة حدث merge request"""
+        project_name = event['project']['name']
+        mr_title = event['object_attributes']['title']
+        mr_state = event['object_attributes']['state']
+        source_branch = event['object_attributes']['source_branch']
+        target_branch = event['object_attributes']['target_branch']
+        user_name = event['user']['name']
+        
+        message = f"🔄 **Merge Request في {project_name}**\n\n" \
+                 f"📌 **العنوان:** {mr_title}\n" \
+                 f"👤 **المستخدم:** {user_name}\n" \
+                 f"🌿 **من:** `{source_branch}` → **إلى:** `{target_branch}`\n" \
+                 f"📊 **الحالة:** {mr_state}"
+        
+        return message
+    
+    def handle_pipeline_event(self, event):
+        """معالجة حدث pipeline"""
+        project_name = event['project']['name']
+        pipeline_status = event['object_attributes']['status']
+        ref = event['object_attributes']['ref']
+        commit_message = event['commit']['message'] if event.get('commit') else "No message"
+        
+        status_emoji = {
+            'success': '✅',
+            'failed': '❌',
+            'running': '🔄',
+            'pending': '⏳'
+        }.get(pipeline_status, '📊')
+        
+        message = f"⚙️ **Pipeline {pipeline_status} في {project_name}**\n\n" \
+                 f"{status_emoji} **الحالة:** {pipeline_status}\n" \
+                 f"🌿 **الفرع:** `{ref}`\n" \
+                 f"📝 **الـ commit:** {commit_message[:100]}..."
+        
+        return message
+    
+    def handle_tag_event(self, event):
+        """معالجة حدث tag"""
+        project_name = event['project']['name']
+        user_name = event['user_name']
+        tag_name = event['ref'].split('/')[-1]
+        
+        message = f"🏷️ **Tag جديد في {project_name}**\n\n" \
+                 f"👤 **بواسطة:** {user_name}\n" \
+                 f"🔖 **اسم الـ tag:** `{tag_name}`"
+        
+        return message
+    
+    def handle_comment_event(self, event):
+        """معالجة حدث تعليق"""
+        project_name = event['project']['name']
+        user_name = event['user']['name']
+        noteable_type = event['object_attributes']['noteable_type']
+        
+        message = f"💬 **تعليق جديد في {project_name}**\n\n" \
+                 f"👤 **بواسطة:** {user_name}\n" \
+                 f"📝 **على:** {noteable_type}"
+        
+        return message
+    
+    def register_user(self, chat_id, username, first_name):
+        """تسجيل مستخدم جديد"""
+        try:
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO users (chat_id, username, first_name, is_active)
+                VALUES (?, ?, ?, 1)
+            ''', (chat_id, username, first_name))
+            self.conn.commit()
+            logger.info(f"✅ User registered: {username} ({chat_id})")
+        except Exception as e:
+            logger.error(f"❌ Error registering user: {e}")
+    
+    def get_registered_users(self):
+        """الحصول على قائمة المستخدمين المسجلين"""
+        self.cursor.execute('SELECT chat_id, username, first_name FROM users WHERE is_active = 1')
+        return self.cursor.fetchall()
+    
+    def get_user_projects(self, chat_id):
+        """الحصول على مشاريع المستخدم"""
+        self.cursor.execute('SELECT id, name, gitlab_url FROM projects WHERE chat_id = ?', (chat_id,))
+        return self.cursor.fetchall()
+    
+    def get_bot_stats(self):
+        """إحصائيات البوت"""
+        # عدد المستخدمين
+        self.cursor.execute('SELECT COUNT(*) FROM users WHERE is_active = 1')
+        users_count = self.cursor.fetchone()[0]
+        
+        # عدد المشاريع
+        self.cursor.execute('SELECT COUNT(*) FROM projects')
+        projects_count = self.cursor.fetchone()[0]
+        
+        # أول وآخر مستخدم
+        self.cursor.execute('SELECT MIN(registered_at), MAX(registered_at) FROM users')
+        first_user, last_user = self.cursor.fetchone()
+        
+        return {
+            'users_count': users_count,
+            'projects_count': projects_count,
+            'first_user': first_user or 'N/A',
+            'last_user': last_user or 'N/A',
+            'uptime': 'Running'
+        }
+    
+    def send_message(self, chat_id, text):
+        """إرسال رسالة إلى مستخدم معين"""
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        payload = {
+            'chat_id': chat_id,
+            'text': text,
+            'parse_mode': 'Markdown'
+        }
+        
+        try:
+            response = requests.post(url, json=payload)
+            if response.status_code == 200:
+                logger.info(f"✅ Message sent to {chat_id}")
+            else:
+                logger.error(f"❌ Failed to send message: {response.text}")
+        except Exception as e:
+            logger.error(f"❌ Error sending message: {e}")
+    
+    def broadcast_to_all_users(self, text):
+        """بث رسالة لجميع المستخدمين النشطين"""
+        users = self.get_registered_users()
+        for user in users:
+            chat_id = user[0]
+            self.send_message(chat_id, text)
+            time.sleep(0.1)  # تجنب rate limiting
+    
+    def set_webhook(self, url):
+        """ضبط webhook للتليجرام"""
+        self.webhook_url = url
+        api_url = f"https://api.telegram.org/bot{self.telegram_token}/setWebhook"
+        
+        try:
+            response = requests.post(api_url, data={'url': f"{url}/webhook/telegram"})
+            result = response.json()
+            
+            if result.get('ok'):
+                logger.info("✅ Telegram webhook set successfully!")
+                return True
+            else:
+                logger.error(f"❌ Failed to set webhook: {result}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Error setting webhook: {e}")
+            return False
+    
+    def run(self, host='0.0.0.0', port=5000, debug=False):
+        """تشغيل البوت"""
+        logger.info(f"🚀 Starting YCat TVTC Bot on {host}:{port}")
+        logger.info(f"🔑 Token: {self.telegram_token[:15]}...")
+        logger.info(f"🤖 Username: {self.bot_username}")
+        
+        if debug:
+            logger.info("🔧 Debug mode is ON")
+        
+        self.app.run(host=host, port=port, debug=debug, use_reloader=False)
+
+def main():
+    """الدالة الرئيسية"""
+    bot = YCatTVTCBot()
+    
+    # إذا كنت تريد ضبط webhook تلقائياً، أضف الرابط هنا
+    # WEBHOOK_URL = "https://your-domain.com"
+    # bot.set_webhook(WEBHOOK_URL)
+    
+    # تشغيل البوت
+    bot.run(debug=True)
+
+if __name__ == '__main__':
+    main()
